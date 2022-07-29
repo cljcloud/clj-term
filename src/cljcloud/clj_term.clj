@@ -6,6 +6,204 @@
            (java.nio.charset Charset)
            (java.util ArrayList List Vector)))
 
+(defonce ^Character _s "_")
+(defonce ^Character _n \newline)
+
+(defprotocol IGrid
+  "
+    Grid is a 2 dimensional array, not symmetric, not contiguous.
+    Col -> x, Row -> y
+    If value for intermediate x, y is missed in data it's defaults to \\space.
+    ┌─────────────────────────────────────▶︎ x
+    │┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐
+    ││(0,0)││(1,0)││(2,0)││(3,0)││(4,0)│
+    │└─────┘└─────┘└─────┘└─────┘└─────┘
+    │┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐
+    ││(0,1)││(1,1)││(2,1)││(3,1)││(4,1)│
+    │└─────┘└─────┘└─────┘└─────┘└─────┘
+    │┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐
+    ││(0,2)││(1,2)││(2,2)││(3,2)││(4,2)│
+    │└─────┘└─────┘└─────┘└─────┘└─────┘
+    │┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐
+    ││(0,3)││(1,3)││(2,3)││(3,3)││(4,3)│
+    │└─────┘└─────┘└─────┘└─────┘└─────┘
+    │┌─────┐┌─────┐┌─────┐┌─────┐┌─────┐
+    ││(0,4)││(1,4)││(2,4)││(3,4)││(4,4)│
+    │└─────┘└─────┘└─────┘└─────┘└─────┘
+    ▼
+    y
+  "
+  (render [this])
+  (width [this])
+  (height [this])
+  (add-row [this row]))
+
+(defn add-rows [matrix rows-count]
+  (concat matrix (repeat rows-count '())))
+
+(defrecord Grid
+  [matrix start end]
+  IGrid
+  (render [this]
+    (let [sb (StringBuilder.)
+          [max-x max-y] end]
+      (doseq [i (range (height this))
+              :let [row (nth matrix i)]]
+        (doseq [j (range (width this))
+                :let [col (nth row j _s)]]
+          (let [^Character val (or col _s)]
+            (.append sb val)))
+        (when (< i max-y)
+          (.append sb ^Character _n)))
+      (.toString sb)))
+  (width [_] (inc (first end)))
+  (height [_] (inc (second end)))
+  (add-row [_ row] (Grid. (concat matrix [row]) start [(first end) (inc (second end))]))
+  Object
+  (toString [this] (render this)))
+
+(def empty-grid (Grid. [] [0 0] [0 0]))
+
+(defn max-x [matrix]
+  (dec (apply max (map count matrix))))
+
+(defn max-y [matrix]
+  (dec (count matrix)))
+
+(defn max-xy [matrix]
+  [(max-x matrix) (max-y matrix)])
+
+(defn sparse
+  "Fills in missing column values in matrix with empty value."
+  ([matrix] (sparse matrix _s))
+  ([matrix empty]
+   (let [[max-x max-y] (max-xy matrix)]
+     (for [y (range (inc max-y))
+           :let [row (nth matrix y)]]
+       (for [x (range (inc max-x))
+             :let [col (nth row x empty)]]
+         col)))))
+
+(defn grid [matrix]
+  (when (seq matrix)
+    (let [end (max-xy matrix)]
+      (Grid. matrix [0 0] end))))
+
+(defn grid? [x]
+  (instance? Grid x))
+
+(defn adjust-rows
+  "Adjusts both matrices to ensure they both have same amount of rows.
+  Fills in empty rows."
+  [lm rm]
+  (let [left-rows-count  (count lm)
+        right-rows-count (count rm)]
+    (if (> right-rows-count left-rows-count)
+      [(add-rows lm (- right-rows-count left-rows-count)) rm]
+      [lm (add-rows rm (- left-rows-count right-rows-count))])))
+
+(defn halign [grids]
+  (reduce
+    (fn [left right]
+      (let [[alm arm] (adjust-rows (:matrix left) (:matrix right))
+            new-matrix (map concat (sparse alm) arm)
+            end        (max-xy new-matrix)]
+        (Grid. new-matrix (:start left) end)))
+    grids))
+
+(defn valign [grids]
+  (reduce
+    (fn [top bottom]
+      (let [new-matrix (concat (:matrix top) (:matrix bottom))
+            end        (max-xy new-matrix)]
+        (Grid. new-matrix (:start top) end)))
+    grids))
+
+(defn text [txt]
+  (let [matrix (->> txt
+                    str/split-lines
+                    (map (partial map char)))]
+    (grid matrix)))
+
+(defn hline
+  ([n]
+   (hline n \─ \─ \─))
+  ([n body-char]
+   (hline n body-char body-char body-char))
+  ([n body-char start-char end-char]
+   (cond
+     (<= n 0) nil
+     (= n 1) (add-row empty-grid [body-char])
+     (= n 2) (text (str start-char end-char))
+     :else (text (str start-char
+                      (apply str (repeat (- n 2) body-char))
+                      end-char)))))
+
+(defn vline
+  ([n]
+   (vline n \│ \│ \│))
+  ([n body-char]
+   (vline n body-char body-char body-char))
+  ([n body-char start-char end-char]
+   (cond
+     (<= n 0) nil
+     (= n 1) (add-row empty-grid [body-char])
+     (= n 2) (text (str start-char _n end-char))
+     :else (text (str/join _n
+                           (list
+                             start-char
+                             (str/join _n (repeat (- n 2) body-char))
+                             end-char))))))
+
+(defn box [g]
+  (if (grid? g)
+    (let [h           (height g)
+          left-line   (vline (+ 2 h) \│ \+ \+)
+          right-line  (vline (+ 2 h) \│ \+ \+)
+          w           (width g)
+          top-line    (hline w)
+          bottom-line (hline w)]
+      (halign [left-line (valign [top-line
+                                  g
+                                  bottom-line]) right-line]))
+    (if (string? g)
+      (box (text g))
+      (throw (ex-info "Unsupported input, expected instance of Grid or String" {:input g})))))
+
+
+(comment
+
+
+  (time (print (str (box "Hello World!
+Aaa"))))
+
+
+  (print (str (valign [(box "
+test
+")
+                       (box "a")])))
+
+
+
+  (time (print (str (halign
+                      [(text "hello
+aaa")
+                       (text "world
+bbb")]
+                      ))))
+
+
+  (print (str (valign [(text "hello")
+                       (text "world")])))
+
+
+  ;;123xx     000   123xx 000
+  ;;45xxx   +     = 45xxx xxx
+  ;;678xx           678xx xxx
+  ;;91011           91011 xxx
+
+  )
+
 ;; ANSI terminal interaction
 ;; https://en.wikipedia.org/wiki/ANSI_escape_code
 ;; https://www.lihaoyi.com/post/BuildyourownCommandLinewithANSIescapecodes.html
